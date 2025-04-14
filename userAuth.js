@@ -219,34 +219,19 @@ router.post("/admin/approve-user/:userId", authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Admin: Get Pending Approvals
-router.get("/admin/pending-approvals", authMiddleware, async (req, res) => {
+router.get('/admin/pending-approvals', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'Admin' && req.user.role !== 'Workshop Manager') {
+    return res.status(403).json({ message: 'Unauthorized' });
+  }
+
   try {
-    if (req.user.role !== "Admin") {
-      return res.status(403).json({ message: "Access Denied. Admins only." });
-    }
-
-    const pendingUsers = await User.find({ 
-      isApproved: false,
-      role: { $ne: "Admin" } // Exclude Admin users
-    });
-
-    // Exclude passwords from response
-    const sanitizedUsers = pendingUsers.map(user => ({
-      _id: user._id,
-      name: user.name,
-      mobile: user.mobile,
-      email: user.email,
-      role: user.role,
-      createdAt: user.createdAt
-    }));
-
-    res.json({ success: true, users: sanitizedUsers });
+    const pendingUsers = await User.find({ isApproved: false });
+    res.json({ users: pendingUsers });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error", error });
+    res.status(500).json({ message: 'Error fetching pending approvals' });
   }
 });
+
 
 // ✅ Logout API - No action needed
 router.post("/logout", (req, res) => {
