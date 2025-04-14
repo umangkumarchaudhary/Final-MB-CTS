@@ -219,7 +219,8 @@ router.post("/admin/approve-user/:userId", authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/admin/pending-approvals', authenticateToken, async (req, res) => {
+router.get('/admin/pending-approvals', authMiddleware, async (req, res) => {
+
   if (req.user.role !== 'Admin' && req.user.role !== 'Workshop Manager') {
     return res.status(403).json({ message: 'Unauthorized' });
   }
