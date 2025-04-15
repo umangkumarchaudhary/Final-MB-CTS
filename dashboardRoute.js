@@ -1914,6 +1914,157 @@ async function calculateBayWorkMetrics(dateRanges, timePeriods) {
   return formattedResult;
 }
 
+router.get("/active-stages-with-duration", authMiddleware, async (req, res) => {
+  try {
+    const activeVehicles = await Vehicle.find({ exitTime: null })
+      .sort({ entryTime: -1 })
+      .lean();
+
+    const now = new Date();
+    
+    const vehiclesWithActiveStages = activeVehicles.map(vehicle => {
+      const stages = vehicle.stages || [];
+      const activeStages = [];
+      const stageStartTimes = {};
+
+      // First pass to record all start times
+      stages.forEach(stage => {
+        if (stage.eventType === "Start") {
+          // For dependent stages, we'll handle them specially in the next step
+          if (!isDependentStage(stage.stageName)) {
+            stageStartTimes[stage.stageName] = stage.timestamp;
+          }
+        } else if (stage.eventType === "End" && stageStartTimes[stage.stageName]) {
+          delete stageStartTimes[stage.stageName];
+        }
+      });
+
+      // Handle dependent stages
+      const dependentStages = {
+        // Job Card Creation + Customer Approval is implicitly ended by Ready for Washing
+        'Job Card Creation + Customer Approval': {
+          endedBy: stage => stage.stageName === 'Ready for Washing' && stage.eventType === 'Start',
+          isActive: false
+        },
+        // Additional Work Approval is a one-time start without explicit end
+        'Additional Work Job Approval': {
+          endedBy: null, // No explicit end event
+          isActive: stages.some(s => s.stageName.startsWith('Additional Work Job Approval') && s.eventType === 'Start')
+        },
+        // Ready for Washing is implicitly ended by Washing stage start
+        'Ready for Washing': {
+          endedBy: stage => stage.stageName === 'Washing' && stage.eventType === 'Start',
+          isActive: false
+        },
+        // Job Card Received has multiple variants that are one-time starts
+        'Job Card Received': {
+          endedBy: null, // No explicit end event
+          isActive: stages.some(s => (
+            s.stageName.includes('Job Card Received') && 
+            s.eventType === 'Start' &&
+            !['Job Card Received + Bay Allocation'].some(exclude => s.stageName.includes(exclude))
+          )
+    )}
+      };
+
+      // Check dependent stages
+      for (const [stagePattern, config] of Object.entries(dependentStages)) {
+        // Find all matching start events
+        const stageStarts = stages.filter(s => 
+          s.stageName.includes(stagePattern) && 
+          s.eventType === 'Start'
+        );
+
+        for (const startStage of stageStarts) {
+          let isEnded = false;
+          
+          if (config.endedBy) {
+            // Check if there's a stage that marks this as ended
+            isEnded = stages.some(s => 
+              config.endedBy(s) && 
+              s.timestamp > startStage.timestamp
+            );
+          } else {
+            // For stages without explicit end, use the config's isActive flag
+            isEnded = !config.isActive;
+          }
+
+          if (!isEnded) {
+            const durationMinutes = Math.round((now - startStage.timestamp) / (1000 * 60));
+            activeStages.push({
+              stageName: startStage.stageName,
+              startedAt: startStage.timestamp,
+              durationMinutes,
+              durationFormatted: `${Math.floor(durationMinutes / 60)}h ${durationMinutes % 60}m`,
+              startedBy: startStage.performedBy?.userName || 'Unknown',
+              role: startStage.role,
+              isDependentStage: true,
+              ...(startStage.workType && { workType: startStage.workType }),
+              ...(startStage.bayNumber && { bayNumber: startStage.bayNumber })
+            });
+          }
+        }
+      }
+
+      // Handle regular stages (non-dependent)
+      Object.entries(stageStartTimes).forEach(([stageName, startTime]) => {
+        const startStage = stages.find(s => 
+          s.stageName === stageName && 
+          s.timestamp.getTime() === startTime.getTime()
+        );
+        
+        if (startStage) {
+          const durationMinutes = Math.round((now - startTime) / (1000 * 60));
+          activeStages.push({
+            stageName,
+            startedAt: startTime,
+            durationMinutes,
+            durationFormatted: `${Math.floor(durationMinutes / 60)}h ${durationMinutes % 60}m`,
+            startedBy: startStage.performedBy?.userName || 'Unknown',
+            role: startStage.role,
+            isDependentStage: false,
+            ...(startStage.workType && { workType: startStage.workType }),
+            ...(startStage.bayNumber && { bayNumber: startStage.bayNumber })
+          });
+        }
+      });
+
+      return {
+        vehicleNumber: vehicle.vehicleNumber,
+        entryTime: vehicle.entryTime,
+        activeStages,
+        totalActiveStages: activeStages.length
+      };
+    });
+
+    // Helper function to identify dependent stages
+    function isDependentStage(stageName) {
+      return [
+        'Job Card Creation + Customer Approval',
+        'Additional Work Job Approval',
+        'Ready for Washing',
+        'Job Card Received'
+      ].some(pattern => stageName.includes(pattern));
+    }
+
+    const result = vehiclesWithActiveStages.filter(v => v.totalActiveStages > 0);
+
+    return res.status(200).json({
+      success: true,
+      count: result.length,
+      vehicles: result
+    });
+
+  } catch (error) {
+    console.error("❌ Error in /active-stages-with-duration:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message
+    });
+  }
+});
+
 
 
 

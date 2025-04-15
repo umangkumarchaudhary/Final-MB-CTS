@@ -26,7 +26,7 @@ const allowedRoles = [
   "Parts Team",
 ];
 
-// MongoDB User Schema - With Password and Approval Status
+// MongoDB User Schema - With Password
 const UserSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
@@ -34,7 +34,6 @@ const UserSchema = new mongoose.Schema(
     email: { type: String, sparse: true, default: null },
     password: { type: String, required: true }, // Plain-text password (for now)
     role: { type: String, enum: allowedRoles, required: true },
-    isApproved: { type: Boolean, default: false }, // New field for approval status
   },
   { timestamps: true }
 );
@@ -60,12 +59,6 @@ const authMiddleware = async (req, res, next) => {
       return res.status(401).json({ message: "User not found." });
     }
 
-    // Check if user is approved (except for Admin)
-    if (user.role !== "Admin" && !user.isApproved) {
-      console.log("❌ User Not Approved");
-      return res.status(403).json({ message: "Your account is pending admin approval." });
-    }
-
     console.log("✅ Authenticated User:", {
       id: user._id,
       role: user.role,
@@ -80,7 +73,7 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
-// ✅ Register User (Requires Admin Approval for non-Admin roles)
+// ✅ Register User (No approval required)
 router.post("/register", async (req, res) => {
   try {
     const { name, mobile, email, password, role } = req.body;
@@ -106,26 +99,20 @@ router.post("/register", async (req, res) => {
       }
     }
 
-    // Create user with approval status
+    // Create user
     const newUser = new User({
       name,
       mobile,
       email: formattedEmail,
       password, // Store as plain-text for now (no hashing)
       role,
-      isApproved: role === "Admin" // Auto-approve Admin, others need approval
     });
 
     await newUser.save();
 
-    const message = role === "Admin" 
-      ? "Admin user registered successfully. You can log in immediately."
-      : "User registered successfully. Please wait for admin approval before logging in.";
-
     res.status(201).json({
       success: true,
-      message,
-      requiresApproval: role !== "Admin"
+      message: "User registered successfully. You can log in immediately.",
     });
   } catch (error) {
     console.error("Registration Error:", error);
@@ -137,7 +124,7 @@ router.post("/register", async (req, res) => {
   }
 });
 
-// ✅ Login (Mobile & Password Required, Check Approval Status)
+// ✅ Login (Mobile & Password Required)
 router.post("/login", async (req, res) => {
   try {
     const { mobile, password } = req.body;
@@ -151,13 +138,6 @@ router.post("/login", async (req, res) => {
 
     if (!user || user.password !== password) {
       return res.status(404).json({ message: "Invalid mobile or password." });
-    }
-
-    // Check if user is approved (except for Admin)
-    if (user.role !== "Admin" && !user.isApproved) {
-      return res.status(403).json({ 
-        message: "Your account is pending admin approval. Please wait for approval before logging in." 
-      });
     }
 
     // Generate JWT with long expiration
@@ -181,59 +161,6 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// ✅ Admin: Approve User
-router.post("/admin/approve-user/:userId", authMiddleware, async (req, res) => {
-  try {
-    if (req.user.role !== "Admin") {
-      return res.status(403).json({ message: "Access Denied. Admins only." });
-    }
-
-    const userId = req.params.userId;
-    const user = await User.findById(userId);
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    if (user.isApproved) {
-      return res.status(400).json({ message: "User is already approved" });
-    }
-
-    user.isApproved = true;
-    await user.save();
-
-    res.json({ 
-      success: true, 
-      message: "User approved successfully",
-      user: {
-        _id: user._id,
-        name: user.name,
-        mobile: user.mobile,
-        role: user.role,
-        isApproved: user.isApproved
-      }
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error", error });
-  }
-});
-
-router.get('/admin/pending-approvals', authMiddleware, async (req, res) => {
-
-  if (req.user.role !== 'Admin' && req.user.role !== 'Workshop Manager') {
-    return res.status(403).json({ message: 'Unauthorized' });
-  }
-
-  try {
-    const pendingUsers = await User.find({ isApproved: false });
-    res.json({ users: pendingUsers });
-  } catch (error) {
-    res.status(500).json({ message: 'Error fetching pending approvals' });
-  }
-});
-
-
 // ✅ Logout API - No action needed
 router.post("/logout", (req, res) => {
   res.json({ success: true, message: "Logged out successfully" });
@@ -255,7 +182,6 @@ router.get("/users", authMiddleware, async (req, res) => {
       mobile: user.mobile,
       email: user.email,
       role: user.role,
-      isApproved: user.isApproved,
       createdAt: user.createdAt
     }));
 
@@ -282,7 +208,6 @@ router.get("/profile", authMiddleware, async (req, res) => {
         email: user.email,
         mobile: user.mobile,
         role: user.role,
-        isApproved: user.isApproved
       },
     });
   } catch (error) {
@@ -308,54 +233,6 @@ router.delete("/users/:userId", authMiddleware, async (req, res) => {
     res.json({ success: true, message: "User deleted successfully" });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ success: false, message: "Server error", error });
-  }
-});
-
-// ✅ Admin: Add User (Automatically approved)
-router.post("/admin/add-user", authMiddleware, async (req, res) => {
-  try {
-    const { name, mobile, email, password, role } = req.body;
-
-    if (req.user.role !== "Admin") {
-      return res.status(403).json({ success: false, message: "Access Denied. Admins only." });
-    }
-
-    if (!name || !mobile || !password || !allowedRoles.includes(role)) {
-      return res.status(400).json({ success: false, message: "Invalid input data." });
-    }
-
-    // Check if user already exists
-    const existingUser = await User.findOne({ mobile });
-    if (existingUser) {
-      return res.status(400).json({ success: false, message: "User with this mobile already exists." });
-    }
-
-    // Create new user (automatically approved when added by admin)
-    const newUser = new User({
-      name,
-      mobile,
-      email: email?.trim() || null,
-      password,
-      role,
-      isApproved: true
-    });
-
-    await newUser.save();
-
-    res.status(201).json({ 
-      success: true, 
-      message: "User added successfully.", 
-      user: {
-        _id: newUser._id,
-        name: newUser.name,
-        mobile: newUser.mobile,
-        role: newUser.role,
-        isApproved: newUser.isApproved
-      }
-    });
-  } catch (error) {
-    console.error("Admin Add User Error:", error);
     res.status(500).json({ success: false, message: "Server error", error });
   }
 });
