@@ -21,7 +21,6 @@ const allowedRoles = [
   "Job Controller",
   "Bay Technician",
   "Final Inspection Technician",
-  "Diagnosis Engineer",
   "Washing",
   "Parts Team",
 ];

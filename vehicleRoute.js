@@ -430,7 +430,7 @@ router.post("/vehicle-check", authMiddleware, async (req, res) => {
     }
 
     // TIME RESTRICTIONS FOR CERTAIN STAGES
-    const restrictedStages = ["Interactive Bay", "Washing", "Final Inspection", "Creation of Parts Estimate"];
+   const restrictedStages = ["Interactive Bay", "Washing", "Final Inspection", "Creation of Parts Estimate"];
     if (restrictedStages.includes(stageName) && eventType === "End") {
       const starts = vehicle.stages
         .filter(stage => stage.stageName === stageName && stage.eventType === "Start")
@@ -448,7 +448,7 @@ router.post("/vehicle-check", authMiddleware, async (req, res) => {
         }
       }
 
-      if (lastUnendedStart && (new Date() - new Date(lastUnendedStart.timestamp)) / 60000 < 10) {
+      if (lastUnendedStart && (new Date() - new Date(lastUnendedStart.timestamp)) / 60000 < 1) {
         return res.status(400).json({
           success: false,
           message: `${stageName} cannot be ended within 10 minutes of starting.`
